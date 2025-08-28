@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Frontend Debug</title>
+</head>
+<body>
+  <h2>Frontend Debug</h2>
+  <button id="test-btn">Test fetch /detect (C E G)</button>
+  <pre id="output"></pre>
+  <script>
+    document.getElementById('test-btn').onclick = async () => {
+      document.getElementById('output').textContent = 'Testing...';
+      try {
+        const res = await fetch('/detect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes: ["C", "E", "G"] })
+        });
+        const text = await res.text();
+        document.getElementById('output').textContent = text;
+      } catch (e) {
+        document.getElementById('output').textContent = 'Error: ' + e;
+      }
+    };
+  </script>
+</body>
+</html>

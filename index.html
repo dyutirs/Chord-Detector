@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chord Identifier</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2em; }
+    .result { margin-top: 1em; font-weight: bold; }
+    button { margin: 0.3em; padding: 0.5em 1em; }
+    svg { background:#f9f9f9; border:1px solid #aaa; }
+  </style>
+</head>
+<body>
+  <h2>Chord Identifier</h2>
+  <div class="options">
+    <label><input type="radio" name="mode" value="text" checked> Enter Notes</label>
+    <label><input type="radio" name="mode" value="guitar"> Guitar Fretboard</label>
+    <label><input type="radio" name="mode" value="audio"> Audio Detection</label>
+  </div>
+
+  <!-- Text input -->
+  <div id="text-mode">
+    <input id="notes-input" type="text" placeholder="e.g. C E G" size="30">
+    <button onclick="detectChord()">Detect Chord</button>
+  </div>
+
+  <!-- Guitar mode -->
+  <div id="guitar-mode" style="display:none;">
+    <div id="guitar-image-container" style="text-align:center;">
+      <img id="guitar-image" src="images/guitar.jpg" alt="Guitar"
+        style="max-width:100%; max-height:400px; border:1px solid #aaa; cursor:pointer;" 
+        title="Click to use interactive fretboard">
+      <div><small>Click the guitar to use the interactive fretboard</small></div>
+    </div>
+    <div id="fretboard-container" style="display:none;">
+      <svg id="svg-fretboard" width="100%" height="300" viewBox="0 0 900 300"></svg>
+      <div>
+        <button onclick="detectChord()">Detect Chord</button>
+        <button onclick="resetFretboard()">Reset</button>
+      </div>
+      <div><small>Click circles to select frets. Click nut for open/mute. (EADGBE, 12 frets)</small></div>
+    </div>
+  </div>
+
+  <!-- Audio detection mode -->
+  <div id="audio-mode" style="display:none;">
+    <button id="start-audio">Start Listening</button>
+    <button id="stop-audio" disabled>Stop Listening</button>
+    <div><small>Play arpeggios on your guitar while listening is active.</small></div>
+  </div>
+
+  <div class="result" id="result"></div>
+
+  <!-- Scripts -->
+  <script type="module">
+    import { PitchDetector } from "https://esm.sh/pitchy@4.1.0";
+
+    // === NOTES, CHORDS, GUITAR CONFIG ===
+    const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    const GUITAR_TUNING = [4, 11, 7, 2, 9, 4]; // EADGBE semitone indexes
+    const NUM_STRINGS = 6, NUM_FRETS = 12;
+    let fretSelection = Array(NUM_STRINGS).fill(null); // null=open, -1=muted, 0..NUM_FRETS
+
+    const CHORDS = {
+      maj: [0, 4, 7], min: [0, 3, 7], dim: [0, 3, 6], aug: [0, 4, 8],
+      sus2: [0, 2, 7], sus4: [0, 5, 7], "5": [0, 7],
+      "6": [0, 4, 7, 9], min6: [0, 3, 7, 9],
+      "7": [0, 4, 7, 10], maj7: [0, 4, 7, 11], min7: [0, 3, 7, 10],
+      dim7: [0, 3, 6, 9], m7b5: [0, 3, 6, 10],
+      "9": [0, 4, 7, 10, 14], maj9: [0, 4, 7, 11, 14], min9: [0, 3, 7, 10, 14],
+      "11": [0, 4, 7, 10, 14, 17], "13": [0, 4, 7, 10, 14, 17, 21],
+      add9: [0, 4, 7, 14], minadd9: [0, 3, 7, 14]
+    };
+
+
+    // === CHORD DETECTION (via backend) ===
+    async function detectChordFromNotes(noteNames) {
+      try {
+        const res = await fetch('/detect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes: noteNames })
+        });
+        if (!res.ok) throw new Error('Server error');
+        const data = await res.json();
+        return data.chords || [];
+      } catch (e) {
+        document.getElementById('result').textContent = 'Error contacting backend.';
+        return [];
+      }
+    }
+
+    // === TEXT + FRETBOARD detectChord ===
+    async function detectChord() {
+      let notes = [];
+      if (document.querySelector('input[name=mode]:checked').value === 'text') {
+        notes = document.getElementById('notes-input').value.trim().split(/\s+/).filter(Boolean);
+      } else {
+        for (let s = 0; s < NUM_STRINGS; s++) {
+          if (fretSelection[s] === -1) continue; // muted
+          let fret = fretSelection[s];
+          if (fret === null) fret = 0;
+          notes.push(NOTES[(GUITAR_TUNING[s] + fret) % 12]);
+        }
+      }
+      if (!notes.length) {
+        document.getElementById('result').textContent = 'Please select or enter notes.';
+        return;
+      }
+      document.getElementById('result').textContent = 'Detecting...\nNotes: ' + notes.join(' ');
+      let detected = [];
+      let raw = '';
+      try {
+        const res = await fetch('/detect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes })
+        });
+        raw = await res.text();
+        const data = JSON.parse(raw);
+        detected = data.chords || [];
+      } catch (e) {
+        document.getElementById('result').textContent = 'Error contacting backend.';
+        return;
+      }
+      document.getElementById('result').textContent =
+        (detected.length ? 'Detected: ' + detected.join(', ') : 'No chord matched.') + '\nNotes: ' + notes.join(' ') + '\nRaw: ' + raw;
+    }
+
+    // === GUITAR FRETBOARD RENDERING ===
+    function renderSvgFretboard() {
+      const svg = document.getElementById('svg-fretboard');
+      svg.innerHTML = '';
+      const w = 900, h = 300, nutW = 38, fretW = (w-nutW)/NUM_FRETS, stringH = h/(NUM_STRINGS+1);
+      // Frets
+      for (let f = 0; f <= NUM_FRETS; f++) {
+        let x = nutW + f*fretW;
+        let lw = (f === 0) ? 6 : 2;
+        let line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', x);
+        line.setAttribute('y1', stringH);
+        line.setAttribute('x2', x);
+        line.setAttribute('y2', h-stringH);
+        line.setAttribute('stroke', '#888');
+        line.setAttribute('stroke-width', lw);
+        svg.appendChild(line);
+      }
+      // Strings
+      for (let s = 0; s < NUM_STRINGS; s++) {
+        let y = stringH*(s+1);
+        let yRev = stringH*((NUM_STRINGS-s));
+        let line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', nutW);
+        line.setAttribute('y1', yRev);
+        line.setAttribute('x2', w);
+        line.setAttribute('y2', yRev);
+        line.setAttribute('stroke', '#444');
+        line.setAttribute('stroke-width', 2);
+        svg.appendChild(line);
+      }
+      // Markers
+      [3,5,7,9,12].forEach(f => {
+        let x = nutW + (f-0.5)*fretW;
+        let y = h/2;
+        let circ = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circ.setAttribute('cx', x);
+        circ.setAttribute('cy', y);
+        circ.setAttribute('r', 10);
+        circ.setAttribute('fill', '#eee');
+        circ.setAttribute('stroke', '#bbb');
+        circ.setAttribute('stroke-width', 2);
+        svg.appendChild(circ);
+      });
+      // Frets + notes
+      for (let s = 0; s < NUM_STRINGS; s++) {
+        let y = stringH*((NUM_STRINGS-s));
+        // Nut toggle
+        let nutFill, nutStroke, nutText;
+        if (fretSelection[s] === -1) { nutFill = '#ccc'; nutStroke = '#888'; nutText = 'X'; }
+        else if (fretSelection[s] === null) { nutFill = '#90ee90'; nutStroke = '#388e3c'; nutText = 'O'; }
+        else { nutFill = '#fff'; nutStroke = '#aaa'; nutText = 'O'; }
+        let nutCirc = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        nutCirc.setAttribute('cx', nutW/2);
+        nutCirc.setAttribute('cy', y);
+        nutCirc.setAttribute('r', 14);
+        nutCirc.setAttribute('fill', nutFill);
+        nutCirc.setAttribute('stroke', nutStroke);
+        nutCirc.setAttribute('stroke-width', 2);
+        nutCirc.style.cursor = 'pointer';
+        nutCirc.addEventListener('click', () => { fretSelection[s] = (fretSelection[s] === -1 ? null : -1); renderSvgFretboard(); });
+        svg.appendChild(nutCirc);
+        let nutTextElem = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        nutTextElem.setAttribute('x', nutW/2);
+        nutTextElem.setAttribute('y', y+5);
+        nutTextElem.setAttribute('text-anchor', 'middle');
+        nutTextElem.setAttribute('font-size', 16);
+        nutTextElem.setAttribute('fill', '#333');
+        nutTextElem.textContent = nutText;
+        svg.appendChild(nutTextElem);
+        // Frets
+        for (let f = 1; f <= NUM_FRETS; f++) {
+          let x = nutW + (f-0.5)*fretW;
+          let selected = fretSelection[s] === f;
+          let fill = selected ? '#90ee90' : '#fff';
+          let stroke = selected ? '#388e3c' : '#aaa';
+          let note = NOTES[(GUITAR_TUNING[s] + f) % 12];
+          let circ = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circ.setAttribute('cx', x);
+          circ.setAttribute('cy', y);
+          circ.setAttribute('r', 14);
+          circ.setAttribute('fill', fill);
+          circ.setAttribute('stroke', stroke);
+          circ.setAttribute('stroke-width', 2);
+          circ.style.cursor = 'pointer';
+          circ.addEventListener('click', () => { fretSelection[s] = f; renderSvgFretboard(); });
+          svg.appendChild(circ);
+          let textElem = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          textElem.setAttribute('x', x);
+          textElem.setAttribute('y', y+5);
+          textElem.setAttribute('text-anchor', 'middle');
+          textElem.setAttribute('font-size', 13);
+          textElem.setAttribute('fill', '#333');
+          textElem.textContent = note;
+          svg.appendChild(textElem);
+        }
+      }
+    }
+    function resetFretboard() { fretSelection = Array(NUM_STRINGS).fill(null); renderSvgFretboard(); }
+
+    // Fretboard image click to show interactive
+    document.addEventListener('DOMContentLoaded', () => {
+      const img = document.getElementById('guitar-image');
+      if (img) {
+        img.onclick = () => {
+          document.getElementById('guitar-image-container').style.display = 'none';
+          document.getElementById('fretboard-container').style.display = '';
+          renderSvgFretboard();
+        };
+      }
+    });
+
+    // === MODE SWITCHING ===
+    function updateModeDisplay() {
+      const mode = document.querySelector('input[name=mode]:checked').value;
+      document.getElementById('text-mode').style.display = mode === 'text' ? '' : 'none';
+      document.getElementById('guitar-mode').style.display = mode === 'guitar' ? '' : 'none';
+      document.getElementById('audio-mode').style.display = mode === 'audio' ? '' : 'none';
+      document.getElementById('result').textContent = '';
+    }
+    document.querySelectorAll('input[name=mode]').forEach(r => r.onchange = updateModeDisplay);
+    document.addEventListener('DOMContentLoaded', updateModeDisplay);
+
+    // === AUDIO DETECTION (continuous) ===
+    let audioContext, analyser, detector, input, audioSource;
+    let audioRunning = false, intervalId = null;
+    let collected = new Set();
+
+    function freqToNote(freq) {
+      const A4 = 440;
+      const noteNumber = 69 + 12 * Math.log2(freq / A4);
+      return NOTES[Math.round(noteNumber) % 12];
+    }
+
+    function detectLoop() {
+      if (!audioRunning) return;
+      analyser.getFloatTimeDomainData(input);
+      const [pitch, clarity] = detector.findPitch(input, audioContext.sampleRate);
+      if (clarity > 0.6) collected.add(freqToNote(pitch)); // Lowered threshold for more tolerance
+      requestAnimationFrame(detectLoop);
+    }
+
+    document.getElementById('start-audio').onclick = async () => {
+      if (audioRunning) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new AudioContext();
+      analyser = audioContext.createAnalyser();
+      audioSource = audioContext.createMediaStreamSource(stream);
+      audioSource.connect(analyser);
+      detector = PitchDetector.forFloat32Array(analyser.fftSize);
+      input = new Float32Array(analyser.fftSize);
+
+      audioRunning = true;
+      collected.clear();
+      detectLoop();
+
+
+      intervalId = setInterval(async () => {
+        if (collected.size > 0) {
+          const notes = Array.from(collected);
+          document.getElementById('result').textContent = 'Detecting...';
+          const detected = await detectChordFromNotes(notes);
+          document.getElementById('result').textContent =
+            detected.length ? "Detected: " + detected.join(", ") : "No chord matched.";
+          collected.clear();
+        }
+      }, 1500);
+
+      document.getElementById('start-audio').disabled = true;
+      document.getElementById('stop-audio').disabled = false;
+    };
+
+    document.getElementById('stop-audio').onclick = () => {
+      if (!audioRunning) return;
+      audioRunning = false;
+      if (intervalId) clearInterval(intervalId);
+      if (audioContext) audioContext.close();
+      document.getElementById('start-audio').disabled = false;
+      document.getElementById('stop-audio').disabled = true;
+      document.getElementById('result').textContent = "Stopped listening.";
+    };
+  </script>
+</body>
+</html>
