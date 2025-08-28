@@ -19,13 +19,15 @@ d the correct chord using a custom **Chord Name Finding Algorithm**.
 ---
 
 ## Project Structure  
-├── guitar.png/ #fretboard UI
-├── chord.java # Core chord logic
-├── ChordDetector.java # Chord detection algorithms
-├── ChordServer.java # Backend handling
-├── index.html # Main UI
-├── backend_test.html # Test interface
-├── frontend_debug.html # Debugging UI
-├── pitchy.esm.js # Pitchy API integration
-)
+
+```text
+├── guitar.png              # for fretboard UI
+├── chord.java            # Core chord logic
+├── ChordDetector.java    # Chord detection algorithms
+├── ChordServer.java      # Backend handling
+├── index.html            # Main UI
+├── backend_test.html     # Test interface
+├── frontend_debug.html   # Debugging UI
+├── pitchy.esm.js         # Pitchy API integration
+
 
